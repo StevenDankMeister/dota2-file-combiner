@@ -3,21 +3,21 @@ module KVParser where
 import Control.Applicative (some)
 import Control.Monad (void)
 import Data.Functor.Identity (Identity)
-import Data.List (intercalate)
-import ParserUtils
+import ParserUtils (testParser)
 import System.IO (IOMode (ReadMode), hGetContents, hSetEncoding, openFile, utf8)
-import Text.Parsec (char, eof, errorPos, lookAhead, many, manyTill, noneOf, oneOf, parse, runParser, skipMany, sourceColumn, sourceLine, space, try, (<|>))
+import Text.Parsec (char, eof, errorPos, lookAhead, many, manyTill, noneOf, oneOf, option, parse, runParser, skipMany, sourceColumn, sourceLine, space, string, try, (<|>))
 import Text.Parsec.Char (spaces)
 import Text.Parsec.Error (ParseError, errorMessages, messageString)
 import Text.Parsec.Language (LanguageDef, emptyDef)
 import Text.Parsec.String (Parser)
 import qualified Text.Parsec.Token as P
 
-newtype Key = Key String deriving (Show)
-data Value = Value [KVPair] Value | ListValue Key Value | End deriving (Show)
+data Root = Root String Nodes deriving (Show)
+type Nodes = [Node]
+data Node = KVNode KVPair | NestedRoot Root deriving (Show)
 
 type KVPair = (String, String)
-type KVFile = Value
+type KVFile = Root
 
 languageDEF :: P.LanguageDef st
 languageDEF =
@@ -28,49 +28,48 @@ languageDEF =
 lexer :: P.GenTokenParser String u Identity
 lexer = P.makeTokenParser languageDEF
 
+parseLexeme :: String -> Parser ()
+parseLexeme l = do
+  P.whiteSpace lexer
+  void $ string l
+  P.whiteSpace lexer
+
 parseKey :: Parser String
 parseKey = do
+  P.whiteSpace lexer
+
   void $ char '\"'
   key <- many $ noneOf "\""
   void $ char '\"'
+
   return key
 
-parseValue :: Parser Value
-parseValue = try parseEnd <|> try parseKVPairs <|> try parseListValue
-
-parseKVPair :: Parser KVPair
+parseKVPair :: Parser Node
 parseKVPair = do
   key <- parseKey
-  void spaces
   value <- parseKey
-  return (key, value)
+  return $ KVNode (key, value)
 
-parseKVPairs :: Parser Value
-parseKVPairs = do
-  kvpairs <- manyTill (parseKVPair <* P.whiteSpace lexer) (lookAhead $ char '{' <|> char '}')
-  Value kvpairs <$> parseValue
+parseNestedLeaf :: Parser Node
+parseNestedLeaf = NestedRoot <$> parseNestedValue
 
-parseListValue :: Parser Value
-parseListValue = do
-  P.whiteSpace lexer
-  key <- Key <$> parseKey
-  P.whiteSpace lexer
-  void $ char '{'
-  value <- parseValue
-  void $ char '}'
-  return $ ListValue key value
+parseNodes :: Parser Nodes
+parseNodes = many (try parseKVPair <|> try parseNestedLeaf)
 
-parseEnd :: Parser Value
-parseEnd = do
-  eof
-  return End
+parseNestedValue :: Parser Root
+parseNestedValue = do
+  key <- parseKey
+  parseLexeme "{"
+  nodes <- parseNodes
+  parseLexeme "}"
+  return $ Root key nodes
 
-parseKVFile :: String -> IO (Either ParseError Value)
+parseKVFile :: String -> IO (Either ParseError KVFile)
 parseKVFile filename = do
   handle <- openFile filename ReadMode
   hSetEncoding handle utf8
   contents <- hGetContents handle
-  case parse parseListValue "" contents of
+  case parse parseNestedValue "" contents of
     Left err -> do
       let pos = errorPos err
       putStrLn $ "Parse error at " ++ (show . sourceLine . errorPos $ err) ++ ":" ++ (show . sourceColumn . errorPos $ err)
