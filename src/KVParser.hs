@@ -38,7 +38,7 @@ data Node = KVNode KVPair NestingLevel | NestedRoot Root NestingLevel
 instance Show Node where
   show (KVNode (x, y) nestingLevel) =
     whitespaces nestingLevel ++ show x ++ "    " ++ show y ++ "\n"
-  show (NestedRoot root nestingLevel) = show root
+  show (NestedRoot root _) = show root
 
 type KVPair = (String, String)
 type KVFile = Root
@@ -81,16 +81,14 @@ parseKVPair nestingLevel = do
   value <- parseKey
   return $ KVNode (key, value) nestingLevel
 
-parseNestedLeaf :: NestingLevel -> Parser Node
--- parseNestedLeaf = NestedRoot <$> parseNestedValue
-parseNestedLeaf nestingLevel = do
+parseNestedRoot :: NestingLevel -> Parser Node
+parseNestedRoot nestingLevel = do
   nested <- parseNestedValue nestingLevel
   return $ NestedRoot nested nestingLevel
 
 parseNodes :: NestingLevel -> Parser Nodes
--- parseNodes nestingLevel = Nodes <$> many (try parseKVPair <|> try parseNestedLeaf)
 parseNodes nestingLevel = do
-  nodes <- many (try (parseKVPair nestingLevel) <|> try (parseNestedLeaf nestingLevel))
+  nodes <- many (try (parseKVPair nestingLevel) <|> try (parseNestedRoot nestingLevel))
   return $ Nodes nodes nestingLevel
 
 parseNestedValue :: NestingLevel -> Parser Root
@@ -101,16 +99,12 @@ parseNestedValue nestingLevel = do
   parseLexeme "}"
   return $ Root key nodes nestingLevel
 
--- getNesting :: Node -> Int
--- getNesting (KVNode _ n) = n
--- getNesting (NestedRoot _ n) = n
-
-parseKVFile :: String -> IO (Either ParseError KVFile)
-parseKVFile filename = do
+parseKVFile :: String -> NestingLevel -> IO (Either ParseError KVFile)
+parseKVFile filename initialNesting = do
   handle <- openFile filename ReadMode
   hSetEncoding handle utf8
   contents <- hGetContents handle
-  case parse (parseNestedValue 0) "" contents of
+  case parse (parseNestedValue initialNesting) "" contents of
     Left err -> do
       let pos = errorPos err
       putStrLn $ "Parse error at " ++ (show . sourceLine . errorPos $ err) ++ ":" ++ (show . sourceColumn . errorPos $ err)
